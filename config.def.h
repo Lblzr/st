@@ -5,7 +5,7 @@
  *
  * font: see http://freedesktop.org/software/fontconfig/fontconfig-user.html
  */
-static char *font = "JetBrainsMonoNL Nerd Font:pixelsize=10:antialias=true:autohint=true:antialias=true"; // pixelsize=12 ?
+static char *font = "JetBrainsMonoNL Nerd Font:pixelsize=14:antialias=true:autohint=true:antialias=true"; // pixelsize=12 ?
 static int borderpx = 1;
 
 /*
@@ -92,6 +92,9 @@ char *termname = "st-256color";
  *	stty tabs
  */
 unsigned int tabspaces = 8;
+
+/* bg opacity */
+float alpha = 0.7;
 
 /* Terminal colors (16 first used in escape sequence) */
 static const char *colorname[] = {
