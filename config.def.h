@@ -5,7 +5,7 @@
  *
  * font: see http://freedesktop.org/software/fontconfig/fontconfig-user.html
  */
-static char *font = "JetBrainsMonoNL Nerd Font:pixelsize=14:antialias=true:autohint=true:antialias=true"; // pixelsize=12 ?
+static char *font = "JetBrainsMonoNL Nerd Font:pixelsize=12:antialias=true:autohint=true:antialias=true"; // pixelsize=12 ?
 static int borderpx = 1;
 
 /*
