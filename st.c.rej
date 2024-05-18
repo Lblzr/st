@@ -1,201 +1,226 @@
 --- st.c
 +++ st.c
-@@ -1087,118 +950,92 @@ kscrollup(const Arg* a)
+@@ -35,7 +35,6 @@ char *argv0;
+ 
+ #include "win.h"
+ #include "st.h"
+-#include "sixel.h"
+ 
+ #if   defined(__linux)
+  #include <pty.h>
+@@ -148,7 +147,6 @@ static void stty(void);
+ static void sigchld(int);
+ 
+ static void csidump(void);
+-static void dcshandle(void);
+ static void csihandle(void);
+ static void csiparse(void);
+ static void csireset(void);
+@@ -211,7 +209,6 @@ Term term;
+ Selection sel;
+ int cmdfd;
+ pid_t pid;
+-sixel_state_t sixel_st;
+ char **opt_cmd  = NULL;
+ char *opt_class = NULL;
+ char *opt_embed = NULL;
+@@ -1012,7 +1009,6 @@ void
+ treset(void)
  {
- 	int n = a->i;
+ 	uint i;
+-	ImageList *im;
  
--	if (!term.histf || IS_SET(MODE_ALTSCREEN))
--		return;
--
- 	if (n < 0)
--		n = MAX(term.row / -n, 1);
-+		n = term.row + n;
- 
--	if (term.scr + n <= term.histf) {
-+	if (term.scr <= HISTSIZE-n) {
- 		term.scr += n;
--	} else {
--		n = term.histf - term.scr;
--		term.scr = term.histf;
-+		selscroll(0, n);
-+		tfulldirt();
+ 	term.c = (TCursor){{
+ 		.mode = ATTR_NULL,
+@@ -1035,9 +1031,6 @@ treset(void)
+ 		tclearregion(0, 0, term.col-1, term.row-1);
+ 		tswapscreen();
  	}
 -
--	if (sel.ob.x != -1 && !sel.alt)
--		selmove(n); /* negate change in term.scr */
--	tfulldirt();
+-	for (im = term.images; im; im = im->next)
+-		im->should_delete = 1;
  }
  
  void
--tscrolldown(int top, int n)
-+tscrolldown(int orig, int n, int copyhist)
+@@ -1054,12 +1047,9 @@ void
+ tswapscreen(void)
  {
--	int i, bot = term.bot;
-+	int i;
+ 	Line *tmp = term.line;
+-	ImageList *im = term.images;
+ 
+ 	term.line = term.alt;
+ 	term.alt = tmp;
+-	term.images = term.images_alt;
+-	term.images_alt = im;
+ 	term.mode ^= MODE_ALTSCREEN;
+ 	tfulldirt();
+ }
+@@ -1069,7 +1059,6 @@ tscrolldown(int orig, int n)
+ {
+ 	int i;
  	Line temp;
+-	ImageList *im;
  
--	if (n <= 0)
--		return;
--	n = MIN(n, bot-top+1);
-+	LIMIT(n, 0, term.bot-orig+1);
-+	if (copyhist) {
-+		term.histi = (term.histi - 1 + HISTSIZE) % HISTSIZE;
-+		temp = term.hist[term.histi];
-+		term.hist[term.histi] = term.line[term.bot];
-+		term.line[term.bot] = temp;
-+	}
-+
+ 	LIMIT(n, 0, term.bot-orig+1);
  
--	tsetdirt(top, bot-n);
--	tclearregion(0, bot-n+1, term.col-1, bot, 1);
-+	tsetdirt(orig, term.bot-n);
-+	tclearregion(0, term.bot-n+1, term.col-1, term.bot);
- 
--	for (i = bot; i >= top+n; i--) {
-+	for (i = term.bot; i >= orig+n; i--) {
- 		temp = term.line[i];
- 		term.line[i] = term.line[i-n];
+@@ -1082,13 +1071,6 @@ tscrolldown(int orig, int n)
  		term.line[i-n] = temp;
  	}
  
--	if (sel.ob.x != -1 && sel.alt == IS_SET(MODE_ALTSCREEN))
--		selscroll(top, bot, n);
-+	if (term.scr == 0)
-+		selscroll(orig, n);
+-	for (im = term.images; im; im = im->next) {
+-		if (im->y < term.bot)
+-			im->y += n;
+-		if (im->y > term.bot)
+-			im->should_delete = 1;
+-	}
+-
+ 	selscroll(orig, n);
  }
  
- void
--tscrollup(int top, int bot, int n, int mode)
-+tscrollup(int orig, int n, int copyhist)
+@@ -1097,7 +1079,6 @@ tscrollup(int orig, int n)
  {
--	int i, j, s;
--	int alt = IS_SET(MODE_ALTSCREEN);
--	int savehist = !alt && top == 0 && mode != SCROLL_NOSAVEHIST;
-+	int i;
+ 	int i;
  	Line temp;
+-	ImageList *im;
  
--	if (n <= 0)
--		return;
--	n = MIN(n, bot-top+1);
--
--	if (savehist) {
--		for (i = 0; i < n; i++) {
--			term.histi = (term.histi + 1) % HISTSIZE;
--			temp = term.hist[term.histi];
--			for (j = 0; j < term.col; j++)
--				tclearglyph(&temp[j], 1);
--			term.hist[term.histi] = term.line[i];
--			term.line[i] = temp;
--		}
--		term.histf = MIN(term.histf + n, HISTSIZE);
--		s = n;
--		if (term.scr) {
--			j = term.scr;
--			term.scr = MIN(j + n, HISTSIZE);
--			s = j + n - term.scr;
--		}
--		if (mode != SCROLL_RESIZE)
--			tfulldirt();
--	} else {
--		tclearregion(0, top, term.col-1, top+n-1, 1);
--		tsetdirt(top+n, bot);
-+	LIMIT(n, 0, term.bot-orig+1);
-+
-+	if (copyhist) {
-+		term.histi = (term.histi + 1) % HISTSIZE;
-+		temp = term.hist[term.histi];
-+		term.hist[term.histi] = term.line[orig];
-+		term.line[orig] = temp;
- 	}
+ 	LIMIT(n, 0, term.bot-orig+1);
  
--	for (i = top; i <= bot-n; i++) {
-+	if (term.scr > 0 && term.scr < HISTSIZE)
-+		term.scr = MIN(term.scr + n, HISTSIZE-1);
-+
-+	tclearregion(0, orig, term.col-1, orig+n-1);
-+	tsetdirt(orig+n, term.bot);
-+
-+	for (i = orig; i <= term.bot-n; i++) {
- 		temp = term.line[i];
- 		term.line[i] = term.line[i+n];
+@@ -1110,13 +1091,6 @@ tscrollup(int orig, int n)
  		term.line[i+n] = temp;
  	}
  
--	if (sel.ob.x != -1 && sel.alt == alt) {
--		if (!savehist) {
--			selscroll(top, bot, -n);
--		} else if (s > 0) {
--			selmove(-s);
--			if (-term.scr + sel.nb.y < -term.histf)
--				selremove();
--		}
+-	for (im = term.images; im; im = im->next) {
+-		if (im->y+im->height/win.ch > term.top)
+-			im->y -= n;
+-		if (im->y+im->height/win.ch < term.top)
+-			im->should_delete = 1;
 -	}
-+	if (term.scr == 0)
-+		selscroll(orig, -n);
+-
+ 	selscroll(orig, -n);
+ }
+ 
+@@ -1635,23 +1609,6 @@ tsetmode(int priv, int set, int *args, int narg)
  }
  
  void
--selmove(int n)
-+selscroll(int orig, int n)
- {
--	sel.ob.y += n, sel.nb.y += n;
--	sel.oe.y += n, sel.ne.y += n;
+-dcshandle(void)
+-{
+-	switch (csiescseq.mode[0]) {
+-	default:
+-		fprintf(stderr, "erresc: unknown csi ");
+-		csidump();
+-		/* die(""); */
+-		break;
+-	case 'q': /* DECSIXEL */
+-		if (sixel_parser_init(&sixel_st, 0, 0 << 16 | 0 << 8 | 0, 1, win.cw, win.ch) != 0)
+-			perror("sixel_parser_init() failed");
+-		term.mode |= MODE_SIXEL;
+-		break;
+-	}
 -}
 -
 -void
--selscroll(int top, int bot, int n)
--{
--	/* turn absolute coordinates into relative */
--	top += term.scr, bot += term.scr;
-+	if (sel.ob.x == -1)
-+		return;
+ csihandle(void)
+ {
+ 	char buf[40];
+@@ -1896,8 +1853,6 @@ strhandle(void)
+ {
+ 	char *p = NULL;
+ 	int j, narg, par;
+-	ImageList *new_image;
+-	int i;
  
--	if (BETWEEN(sel.nb.y, top, bot) != BETWEEN(sel.ne.y, top, bot)) {
-+	if (BETWEEN(sel.nb.y, orig, term.bot) != BETWEEN(sel.ne.y, orig, term.bot)) {
- 		selclear();
--	} else if (BETWEEN(sel.nb.y, top, bot)) {
--		selmove(n);
--		if (sel.nb.y < top || sel.ne.y > bot)
-+	} else if (BETWEEN(sel.nb.y, orig, term.bot)) {
-+		sel.ob.y += n;
-+		sel.oe.y += n;
-+		if (sel.ob.y < term.top || sel.ob.y > term.bot ||
-+		    sel.oe.y < term.top || sel.oe.y > term.bot) {
- 			selclear();
-+		} else {
-+			selnormalize();
-+		}
- 	}
- }
- 
-@@ -1804,24 +1634,24 @@ csihandle(void)
- 	case 'K': /* EL -- Clear line */
- 		switch (csiescseq.arg[0]) {
- 		case 0: /* right */
--			tclearregion(term.c.x, term.c.y, term.col-1, term.c.y, 1);
-+			tclearregion(term.c.x, term.c.y, term.col-1,
-+					term.c.y);
- 			break;
- 		case 1: /* left */
--			tclearregion(0, term.c.y, term.c.x, term.c.y, 1);
-+			tclearregion(0, term.c.y, term.c.x, term.c.y);
- 			break;
- 		case 2: /* all */
--			tclearregion(0, term.c.y, term.col-1, term.c.y, 1);
-+			tclearregion(0, term.c.y, term.col-1, term.c.y);
- 			break;
+ 	term.esc &= ~(ESC_STR_END|ESC_STR);
+ 	strparse();
+@@ -1948,39 +1903,7 @@ strhandle(void)
+ 		xsettitle(strescseq.args[0]);
+ 		return;
+ 	case 'P': /* DCS -- Device Control String */
+-		if (IS_SET(MODE_SIXEL)) {
+-			term.mode &= ~MODE_SIXEL;
+-			new_image = malloc(sizeof(ImageList));
+-			memset(new_image, 0, sizeof(ImageList));
+-			new_image->x = term.c.x;
+-			new_image->y = term.c.y;
+-			new_image->width = sixel_st.image.width;
+-			new_image->height = sixel_st.image.height;
+-			new_image->pixels = malloc(new_image->width * new_image->height * 4);
+-			if (sixel_parser_finalize(&sixel_st, new_image->pixels) != 0) {
+-				perror("sixel_parser_finalize() failed");
+-				sixel_parser_deinit(&sixel_st);
+-				return;
+-			}
+-			sixel_parser_deinit(&sixel_st);
+-			if (term.images) {
+-				ImageList *im;
+-				for (im = term.images; im->next;)
+-					im = im->next;
+-				im->next = new_image;
+-				new_image->prev = im;
+-			} else {
+-				term.images = new_image;
+-			}
+-			for (i = 0; i < (sixel_st.image.height + win.ch-1)/win.ch; ++i) {
+-				int x;
+-				tclearregion(term.c.x, term.c.y, term.c.x+(sixel_st.image.width+win.cw-1)/win.cw, term.c.y);
+-				for (x = term.c.x; x < MIN(term.col, term.c.x+(sixel_st.image.width+win.cw-1)/win.cw); x++)
+-					term.line[term.c.y][x].mode |= ATTR_SIXEL;
+-				tnewline(1);
+-			}
+-		}
+-		return;
++		term.mode |= ESC_DCS;
+ 	case '_': /* APC -- Application Program Command */
+ 	case '^': /* PM -- Privacy Message */
+ 		return;
+@@ -2351,7 +2274,6 @@ eschandle(uchar ascii)
+ 		term.esc |= ESC_UTF8;
+ 		return 0;
+ 	case 'P': /* DCS -- Device Control String */
+-		term.esc |= ESC_DCS;
+ 	case '_': /* APC -- Application Program Command */
+ 	case '^': /* PM -- Privacy Message */
+ 	case ']': /* OSC -- Operating System Command */
+@@ -2454,18 +2376,22 @@ tputc(Rune u)
+ 		if (u == '\a' || u == 030 || u == 032 || u == 033 ||
+ 		   ISCONTROLC1(u)) {
+ 			term.esc &= ~(ESC_START|ESC_STR|ESC_DCS);
++			if (IS_SET(MODE_SIXEL)) {
++				/* TODO: render sixel */;
++				term.mode &= ~MODE_SIXEL;
++				return;
++			}
+ 			term.esc |= ESC_STR_END;
+ 			goto check_control_code;
  		}
- 		break;
- 	case 'S': /* SU -- Scroll <n> line up */
- 		DEFAULT(csiescseq.arg[0], 1);
--		/* xterm, urxvt, alacritty save this in history */
--		tscrollup(term.top, term.bot, csiescseq.arg[0], SCROLL_SAVEHIST);
-+		tscrollup(term.top, csiescseq.arg[0], 0);
- 		break;
- 	case 'T': /* SD -- Scroll <n> line down */
- 		DEFAULT(csiescseq.arg[0], 1);
--		tscrolldown(term.top, csiescseq.arg[0]);
-+		tscrolldown(term.top, csiescseq.arg[0], 0);
- 		break;
- 	case 'L': /* IL -- Insert <n> blank lines */
- 		DEFAULT(csiescseq.arg[0], 1);
+ 
+ 
+ 		if (IS_SET(MODE_SIXEL)) {
+-			if (sixel_parser_parse(&sixel_st, (unsigned char *)&u, 1) != 0)
+-				perror("sixel_parser_parse() failed");
++			/* TODO: implement sixel mode */
+ 			return;
+ 		}
+-		if (term.esc & ESC_DCS)
+-			goto check_control_code;
++		if (term.esc&ESC_DCS && strescseq.len == 0 && u == 'q')
++			term.mode |= MODE_SIXEL;
+ 
+ 		if (strescseq.len+len >= sizeof(strescseq.buf)-1) {
+ 			/*
+@@ -2512,15 +2438,6 @@ check_control_code:
+ 				csihandle();
+ 			}
+ 			return;
+-		} else if (term.esc & ESC_DCS) {
+-			csiescseq.buf[csiescseq.len++] = u;
+-			if (BETWEEN(u, 0x40, 0x7E)
+-					|| csiescseq.len >= \
+-					sizeof(csiescseq.buf)-1) {
+-				csiparse();
+-				dcshandle();
+-			}
+-			return;
+ 		} else if (term.esc & ESC_UTF8) {
+ 			tdefutf8(u);
+ 		} else if (term.esc & ESC_ALTCHARSET) {
